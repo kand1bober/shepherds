@@ -29,41 +29,50 @@ typedef struct {
     int num; //number of sheperd
 } ShepherdInfo;
 
-void shepherd_cross_bridge(ShepherdInfo* info);
+void shepherd(ShepherdInfo* info);
 
 void* shepherd_thread(void* arg) {
     ShepherdInfo* info = (ShepherdInfo*)arg;
-    shepherd_cross_bridge(info);
+    shepherd(info);
     return NULL;
 }
 
 int main() {
-    pthread_t t1, t2, t3, t4;
+    pthread_t t_arr[10] = {0};
 
-    ShepherdInfo shepherd_1 = {.num = 1, .dir = LEFT_TO_RIGHT};
-    ShepherdInfo shepherd_2 = {.num = 2, .dir = LEFT_TO_RIGHT};
-    ShepherdInfo shepherd_3 = {.num = 3, .dir = RIGHT_TO_LEFT};
-    ShepherdInfo shepherd_4 = {.num = 4, .dir = LEFT_TO_RIGHT};
+    //set shepherd directions
+    ShepherdInfo shepherd_arr[10] = {{.dir = LEFT_TO_RIGHT}, 
+                                     {.dir = LEFT_TO_RIGHT},
+                                     {.dir = LEFT_TO_RIGHT},
+                                     {.dir = LEFT_TO_RIGHT},
+                                     
+                                     {.dir = RIGHT_TO_LEFT},
+                                     {.dir = RIGHT_TO_LEFT},
+                                     {.dir = RIGHT_TO_LEFT},
 
-    pthread_create(&t1, NULL, shepherd_thread, (void*)&shepherd_1);
-    // sleep(1); // чтобы показать очередь
-    pthread_create(&t2, NULL, shepherd_thread, (void*)&shepherd_2);
-    // sleep(1);
-    pthread_create(&t3, NULL, shepherd_thread, (void*)&shepherd_3); 
-    // sleep(1);
-    pthread_create(&t4, NULL, shepherd_thread, (void*)&shepherd_4);
+                                     {.dir = LEFT_TO_RIGHT},
+                                     {.dir = LEFT_TO_RIGHT},
+                                     {.dir = LEFT_TO_RIGHT}};
 
-    pthread_join(t1, NULL);
-    pthread_join(t2, NULL);
-    pthread_join(t3, NULL);
-    pthread_join(t4, NULL);
+    //set shepherd numbers (for illustrating only)
+    for (int i = 0; i < 10; i++) {
+        shepherd_arr[i].num = i;
+        pthread_create(&(t_arr[i]), NULL, shepherd_thread, (void*)(&shepherd_arr[i]));
+        usleep(100);
+    }
+
+    for (int i = 0; i < 10; i++) {
+        pthread_join(t_arr[i], NULL);
+    }
 
     return 0;
 }
 
-void shepherd_cross_bridge(ShepherdInfo* info) {
+void shepherd(ShepherdInfo* info) {
     int dir = info->dir; //self direstion
     int num = info->num; //self num (only for printf)
+
+    int my_hat = 1; //shows, is there a hat on shepherd 
 
     pthread_mutex_lock(&bridge.mutex); //lock mutex
     // if hat on bridge AND opposite direction moving
@@ -99,12 +108,13 @@ void shepherd_cross_bridge(ShepherdInfo* info) {
     if (bridge.waiting_count > 0) {
         bridge.waiting_count--;
 
-        // Если ещё есть кто-то в очереди — оставляем шапку, надо продолжить движение колонны в этом направлениии
+        // If there are people in queue -> not awakening waiting processes -> moving in this direction continues
         if (bridge.waiting_count > 0) {
-            bridge.hat = 0;
+            bridge.hat = 0; //take our hat
             printf("shepherd %d finished crossing and took hat (still %d in queue)\n",
             num, bridge.waiting_count);
-        } else {
+        } 
+        else {
             // If we are last in queue -> take hat, free bridge
             bridge.hat = 0;
             bridge.direction = -1;
