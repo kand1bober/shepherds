@@ -4,8 +4,8 @@
 #include <unistd.h>
 #include <stdbool.h>
 
-#define kTimeToCrossAlone 100 //usec
-#define kTimeToCrossWithHerd 300 //usec
+#define kTimeToCrossAlone 10 //usec
+#define kTimeToCrossWithHerd 30 //usec
 
 #define kRightDir 1
 #define kLeftDir 2
@@ -16,6 +16,7 @@ typedef struct {
                    walk_left;
 
     pthread_cond_t ready_to_walk_right;
+    pthread_cond_t left_crossed_breadge;
     bool shepherd_crossing_alone; //to check that only one left shepherd leaves his hat
 
     bool hat_on_right;
@@ -55,22 +56,30 @@ void herd_cross_bridge(BridgeMonitor* mon, int num, int dir, bool left_hat)
 
     printf("shepherd + herd #%d: finished crossing\n", num);
 
-    if (dir == kRightDir) {
-        if (mon->left_queue_count > 1) {
-            //dont change state of direction
-        } 
-        else {
-            pthread_cond_signal(&mon->walk_left); //signal condition for right side shepherds
-        }  
-
+    if (dir == kRightDir) { 
         if (left_hat) {
+            while (mon->left_queue_count > 1) { //wait for left shepherds to to cross
+                mon->bridge_is_busy = false;
+                pthread_cond_wait(&mon->left_crossed_breadge, &mon->mutex);
+            }  
+            mon->bridge_is_busy = true;
+
+            pthread_cond_signal(&mon->walk_left); //signal condition for right side shepherds
+            mon->hat_on_right = false;
             printf("shepherd #%d: took my hat\n", num);
+            mon->left_queue_count--;
+        }
+        else {  
+            mon->left_queue_count--;
+            if (mon->left_queue_count == 1) {
+                pthread_cond_signal(&mon->left_crossed_breadge);
+            }
         }
 
-        mon->left_queue_count--;
     }
     else if (dir == kLeftDir) {
         pthread_cond_signal(&mon->walk_right); //signal condition for left side shepherds
+        pthread_cond_signal(&mon->walk_left); //signal condition for right side shepherds
     }
 
     mon->bridge_is_busy = false;
@@ -83,18 +92,18 @@ void* left_shepherd(void* arg)
 
     printf("shepherd #%d: came\n", num);
 
-    pthread_mutex_lock(&mon->mutex); //lock mutex
     // 0. increment queue counter
     mon->left_queue_count++;
-
-    // 1. cross bridge & leave hat
     bool left_hat = false;
-    if (!mon->hat_on_right && !mon->shepherd_crossing_alone) {
+
+    pthread_mutex_lock(&mon->mutex); //lock mutex
+
+    if (mon->left_queue_count < 2) {
         alone_cross_bridge_and_leave_hat(mon, num, &left_hat);
         pthread_cond_broadcast(&mon->ready_to_walk_right); //signal to all waiting shepherds
     }
     else {
-        while (!mon->hat_on_right && mon->shepherd_crossing_alone) {
+        while (!mon->hat_on_right) { //until first shepherd took the hat, you can become ready to cross
             pthread_cond_wait(&mon->ready_to_walk_right, &mon->mutex);
         }
     }
@@ -106,8 +115,6 @@ void* left_shepherd(void* arg)
 
     herd_cross_bridge(mon, num, kRightDir, left_hat); //crit section
     
-    // pthread_cond_signal(&mon->walk_left); //signal condition for left side shepherds
-
     pthread_mutex_unlock(&mon->mutex); //unlock mutex
 
     return NULL;
@@ -127,8 +134,6 @@ void* right_shepherd(void* arg)
 
     herd_cross_bridge(mon, num, kLeftDir, false); //crit section
 
-    // pthread_cond_signal(&mon->walk_right); //signal condition for left side shepherds
-
     pthread_mutex_unlock(&mon->mutex); //unlock mutex
 
     return NULL;
@@ -138,7 +143,7 @@ int main()
 {
     //set threads
     pthread_t t_arr[10] = {0};
-    BridgeMonitor monitor = {};
+    BridgeMonitor monitor = {.left_queue_count = 0};
     Shepherd shepherd_arr[10];
     for (int i = 0; i < 10; i++) { 
         shepherd_arr[i].monitor = &monitor;
