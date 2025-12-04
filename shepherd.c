@@ -37,7 +37,7 @@ void alone_cross_bridge_and_leave_hat(BridgeMonitor* mon, int num, bool* left_ha
     printf("shepherd #%d: crossing (=>)\n", num);
     usleep(kTimeToCrossAlone);
     
-    mon->hat_on_right;
+    mon->hat_on_right = true;
     *left_hat = true;
     printf("shepherd #%d: left hat on rigt side\n", num);
 
@@ -60,7 +60,7 @@ void herd_cross_bridge(BridgeMonitor* mon, int num, int dir, bool left_hat)
             //dont change state of direction
         } 
         else {
-            mon->bridge_is_busy = false;            
+            pthread_cond_signal(&mon->walk_left); //signal condition for right side shepherds
         }  
 
         if (left_hat) {
@@ -69,9 +69,11 @@ void herd_cross_bridge(BridgeMonitor* mon, int num, int dir, bool left_hat)
 
         mon->left_queue_count--;
     }
-    else {
-        mon->bridge_is_busy = false;
+    else if (dir == kLeftDir) {
+        pthread_cond_signal(&mon->walk_right); //signal condition for left side shepherds
     }
+
+    mon->bridge_is_busy = false;
 }
 
 void* left_shepherd(void* arg)
@@ -89,7 +91,7 @@ void* left_shepherd(void* arg)
     bool left_hat = false;
     if (!mon->hat_on_right && !mon->shepherd_crossing_alone) {
         alone_cross_bridge_and_leave_hat(mon, num, &left_hat);
-        pthread_cond_signal(&mon->ready_to_walk_right);
+        pthread_cond_broadcast(&mon->ready_to_walk_right); //signal to all waiting shepherds
     }
     else {
         while (!mon->hat_on_right && mon->shepherd_crossing_alone) {
@@ -104,7 +106,7 @@ void* left_shepherd(void* arg)
 
     herd_cross_bridge(mon, num, kRightDir, left_hat); //crit section
     
-    pthread_cond_signal(&mon->walk_left); //signal condition for left side shepherds
+    // pthread_cond_signal(&mon->walk_left); //signal condition for left side shepherds
 
     pthread_mutex_unlock(&mon->mutex); //unlock mutex
 
@@ -125,7 +127,7 @@ void* right_shepherd(void* arg)
 
     herd_cross_bridge(mon, num, kLeftDir, false); //crit section
 
-    pthread_cond_signal(&mon->walk_right); //signal condition for right side shepherds
+    // pthread_cond_signal(&mon->walk_right); //signal condition for left side shepherds
 
     pthread_mutex_unlock(&mon->mutex); //unlock mutex
 
