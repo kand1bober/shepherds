@@ -1,29 +1,34 @@
+#define _XOPEN_SOURCE 500
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <time.h>
+
+#include "fifo/fifo.h"
 
 #define kTimeToCrossAlone 10 //usec
 #define kTimeToCrossWithHerd 30 //usec
+#define kQueueTimeDelta 10 //usec
 
 #define kRightDir 1
 #define kLeftDir 2
 
 typedef struct {
     pthread_mutex_t mutex;
-    pthread_cond_t walk_right, //condition variables 
-                   walk_left;
 
-    pthread_cond_t ready_to_walk_right; //to signal that hat is set on right end of bridge
-    pthread_cond_t left_crossed_breadge; //to check that all left shepherds will cross the bridge 
-                                         //while shepherd with hat waits for them 
-    bool shepherd_crossing_alone; //to check that only one left shepherd leaves his hat
+    pthread_cond_t walk_right; //availability of walking in right direction 
+    pthread_cond_t walk_left; //availability of walking in left direction
+    pthread_cond_t left_came; //interaction between new left shepherds and one, that is on the opposite end of bridge, ready to exit 
 
+    bool chain_walk_right; //right shepherd passes all left shepherds after one, who left his hat
+    bool bridge_is_busy;
     bool hat_on_right;
-    bool bridge_is_busy; //shared resource
-    
-    int left_queue_count; //counters of shepherd queues
+
+    FIFO left_queue;
+    FIFO right_queue;
 } BridgeMonitor;
 
 typedef struct {
@@ -31,90 +36,118 @@ typedef struct {
     BridgeMonitor* monitor;
 } Shepherd;
 
-void alone_cross_bridge_and_leave_hat(BridgeMonitor* mon, int num, bool* left_hat)
+//------------ Monitor functions ----------------
+bool able_to_leave_hat(BridgeMonitor* mon, int num)
 {
-    mon->shepherd_crossing_alone = true;
-    printf("shepherd #%d: crossing (=>)\n", num);
-    usleep(kTimeToCrossAlone);
-    
-    mon->hat_on_right = true;
-    *left_hat = true;
-    printf("shepherd #%d: left hat on rigt side\n", num);
+    return (mon->left_queue.count == 1);
+}
 
-    printf("shepherd #%d: crossing (<=)\n", num);
+//TODO: monitor or usual function ?
+void cross_alone(BridgeMonitor* mon, int num, int dir)
+{
+    printf("#%d: crossing (%s)\n", num, dir == kRightDir ? "=>" : "<=");
     usleep(kTimeToCrossAlone);
 }
 
-void herd_cross_bridge(BridgeMonitor* mon, int num, int dir, bool left_hat)
+void leave_hat(BridgeMonitor* mon, int num)
+{
+    mon->hat_on_right = true;
+    printf("#%d: put down my hat\n", num);
+}
+
+void take_hat(BridgeMonitor* mon, int num) 
+{
+    mon->hat_on_right = false;
+    printf("#%d: took my hat\n", num);
+}
+
+void imitate_walk_with_herd(BridgeMonitor* mon, int num, int dir)
 {
     mon->bridge_is_busy = true;
-
-    // crossing
-    printf("shepherd + herd #%d: crossing (%s)\n", num, (dir == kRightDir) ? "=>" : "<=");
+    printf("#%d + herd: crossing (%s)\n", num, (dir == kRightDir) ? "=>" : "<=");
     usleep(kTimeToCrossWithHerd);
-
-    printf("shepherd + herd #%d: finished crossing\n", num);
-
-    if (dir == kRightDir) { 
-        if (left_hat) {
-            mon->bridge_is_busy = false;
-            while (mon->left_queue_count > 1) { //wait for left shepherds to to cross
-                pthread_cond_wait(&mon->left_crossed_breadge, &mon->mutex);
-            }  
-            // mon->bridge_is_busy = true;
-
-            pthread_cond_signal(&mon->walk_left); //signal condition for right side shepherds
-            mon->hat_on_right = false;
-            printf("shepherd #%d: took my hat\n", num);
-            mon->left_queue_count--;
-        }
-        else {  
-            mon->left_queue_count--;
-            if (mon->left_queue_count == 1) {
-                pthread_cond_signal(&mon->left_crossed_breadge);
-            }
-            pthread_cond_signal(&mon->walk_right);
-        }
-
-    }
-    else if (dir == kLeftDir) {
-        pthread_cond_signal(&mon->walk_right); //signal condition for left side shepherds
-        pthread_cond_signal(&mon->walk_left); //signal condition for right side shepherds
-    }
-
+    printf("#%d + herd: finished\n", num);
     mon->bridge_is_busy = false;
 }
+
+void cross_with_herd_to_right(BridgeMonitor* mon, int num, Node* self_ptr, bool have_to_leave_hat)
+{
+    if (have_to_leave_hat) { //we are first
+        imitate_walk_with_herd(mon, num, kRightDir);
+        take_hat(mon, num);
+    }
+    else { //we are not first
+        while (mon->bridge_is_busy && (self_ptr != mon->left_queue.head)) {
+            pthread_cond_wait(&mon->walk_right, &mon->mutex);
+        }
+
+        imitate_walk_with_herd(mon, num, kRightDir);
+    }
+
+    //decide, to continue chain-walk or not
+    mon->chain_walk_right = true; //to prevent right shepherds from entering bridge at the moment, 
+                                  //when: mutex is not owned && no hat && bridge is free 
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += kQueueTimeDelta * 1e3;
+    pthread_cond_timedwait(&mon->left_came, &mon->mutex, &ts); //wait a bit, to let new shepherds join chain-walk
+
+    int res;
+    fifo_dequeue(&mon->left_queue, &res); //leave queue
+    
+    //decide, who to signal  
+    if (mon->left_queue.count > 0) { //there are people in left queue
+        mon->chain_walk_right = true;
+        // printf("#%d: signaling to left, left_count = %d\n", num, mon->left_queue.count);
+        pthread_cond_broadcast(&mon->walk_right);
+    }
+    else if (mon->left_queue.count == 0) { //you are the last from left side
+        mon->chain_walk_right = false;
+        // printf("#%d: signaling to right\n", num);
+        pthread_cond_broadcast(&mon->walk_left);
+    }
+    else { //error
+        printf("some stramge problem");
+        exit(EXIT_FAILURE);
+    }
+    fflush(stdout);
+}
+
+void try_to_cross_to_left(BridgeMonitor* mon, int num)
+{
+    while (mon->bridge_is_busy || mon->hat_on_right || mon->chain_walk_right) {
+        pthread_cond_wait(&mon->walk_left, &mon->mutex);
+    }
+
+    imitate_walk_with_herd(mon, num, kLeftDir);
+
+    pthread_cond_signal(&mon->walk_left); //right shepherds signal only to right shepherds
+}
+
+//-----------------------------------------------
 
 void* left_shepherd(void* arg)
 {
     int num = ((Shepherd*)arg)->num;
     BridgeMonitor* mon = ((Shepherd*)arg)->monitor;
+    printf("#%d: came\n", num);    
 
-    printf("shepherd #%d: came\n", num);
+    pthread_mutex_lock(&mon->mutex);
 
+    //join queue
+    Node* self_ptr = fifo_enqueue(&mon->left_queue, num); //join the end of left queue
+    bool have_to_leave_hat = able_to_leave_hat(mon, num);
+    pthread_cond_signal(&mon->left_came);
 
-    mon->left_queue_count++; //increment queue counter
-    bool left_hat = false; //to identify, whether you left your hat or not
-    pthread_mutex_lock(&mon->mutex); //lock mutex
-
-    if (mon->left_queue_count < 2) { //if you are first on bridge from left side
-        alone_cross_bridge_and_leave_hat(mon, num, &left_hat); 
-        pthread_cond_broadcast(&mon->ready_to_walk_right); //signal to all waiting shepherds
+    //leave hat, if you are first
+    if (have_to_leave_hat) {
+        cross_alone(mon, num, kRightDir);
+        leave_hat(mon, num);
+        cross_alone(mon, num, kLeftDir);
     }
-    else {
-        while (!mon->hat_on_right) { //until first shepherd took back his hat, you can become ready to cross
-            pthread_cond_wait(&mon->ready_to_walk_right, &mon->mutex);
-        }
-    }
+    cross_with_herd_to_right(mon, num, self_ptr, have_to_leave_hat);
 
-    //wait on bridge entry
-    while (mon->bridge_is_busy) {
-        pthread_cond_wait(&mon->walk_right, &mon->mutex); //join queue on condition variable
-    }
-
-    herd_cross_bridge(mon, num, kRightDir, left_hat); //crit section
-    
-    pthread_mutex_unlock(&mon->mutex); //unlock mutex
+    pthread_mutex_unlock(&mon->mutex);
 
     return NULL;
 }
@@ -122,48 +155,65 @@ void* left_shepherd(void* arg)
 void* right_shepherd(void* arg)
 {
     int num = ((Shepherd*)arg)->num;
-    BridgeMonitor* mon = ((Shepherd*)arg)->monitor; 
+    BridgeMonitor* mon = ((Shepherd*)arg)->monitor;
+    printf("#%d: came\n", num);
 
-    printf("shepherd #%d: came\n", num);
+    pthread_mutex_lock(&mon->mutex);
+    fifo_enqueue(&mon->right_queue, num);
 
-    pthread_mutex_lock(&mon->mutex); //lock mutex
-    while (mon->bridge_is_busy || mon->hat_on_right) { //wait till no hat & bridge is empty 
-        pthread_cond_wait(&mon->walk_left, &mon->mutex); //join queue on condition variable
-    }
+    try_to_cross_to_left(mon, num);
 
-    herd_cross_bridge(mon, num, kLeftDir, false); //crit section
-
-    pthread_mutex_unlock(&mon->mutex); //unlock mutex
+    pthread_mutex_unlock(&mon->mutex);
 
     return NULL;
+}
+
+void monitor_init(BridgeMonitor* mon)
+{
+    pthread_mutex_init(&mon->mutex, NULL);
+
+    pthread_cond_init(&mon->walk_left, NULL);
+    pthread_cond_init(&mon->walk_right, NULL);
+    pthread_cond_init(&mon->left_came, NULL);
+
+    mon->hat_on_right = false;
+    mon->bridge_is_busy = false;
+    mon->chain_walk_right = false;
+
+    fifo_init(&mon->left_queue);
+    fifo_init(&mon->right_queue);
 }
 
 int main()
 {
     //set threads
     pthread_t t_arr[10] = {0};
-    BridgeMonitor monitor = {.left_queue_count = 0};
+    BridgeMonitor monitor;
+    monitor_init(&monitor);
+
     Shepherd shepherd_arr[10];
     for (int i = 0; i < 10; i++) { 
         shepherd_arr[i].monitor = &monitor;
         shepherd_arr[i].num = i;
     }
 
+    int time_delta = 50;
+
     //start threads
     for (int i = 0; i < 4; i++) {
         shepherd_arr[i].num = i;
         pthread_create(&(t_arr[i]), NULL, left_shepherd, (void*)(&shepherd_arr[i]));
-        usleep(50);
+        usleep(time_delta);
     }
     for (int i = 4; i < 7; i++) {
         shepherd_arr[i].num = i;
         pthread_create(&(t_arr[i]), NULL, right_shepherd, (void*)(&shepherd_arr[i]));
-        usleep(50);
+        usleep(time_delta);
     }
     for (int i = 7; i < 10; i++) {
         shepherd_arr[i].num = i;
         pthread_create(&(t_arr[i]), NULL, left_shepherd, (void*)(&shepherd_arr[i]));
-        usleep(50);
+        usleep(time_delta);
     }
 
     //join threads

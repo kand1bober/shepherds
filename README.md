@@ -1,101 +1,116 @@
 # Shepherds on narrow bridge
 
-### example of different results in dependence of defined moving "velocity" of shepherds
+условие задачи:
+```C
+Пастухи, для перевода стада через узкий мост, на котором невозможно разойтись двум стадам, используют следующий алгоритм:
+
+Если пастух перед входом на мост видит стада, ожидающие перехода или движущиеся в попутном направлении, то он пристраивается в хвост колонны. Если пастух гонит стадо в одном направлении и перед входом никого нет, он останавливает стадо, в одиночку проходит мост, оставляет на его противоположном конце свою шапку и возвращается к стаду, проводит его через мост, забирает шапку и следует дальше.
+
+Если пастух гонит стадо в другом направлении, и перед входом нет шапки — он смело входит в опасный участок.
+
+При наличии шапки он ждет, пока встречные стада не пройдут полностью. Постройте корректную модель прохода стад через мост, описав поведение каждого пастуха с помощью монитора Хоара.
+```
+
+
+### build
+```C
+gcc shepherd.c fifo/fifo.c -o <name>
+```
+
+### пример различия в результатах в зависимоси от временной дельты между появлениями пастухов
 
 ## 1)
 
-velocity:
+delta:
 ```C
-#define kTimeToCrossAlone 10 //usec
-#define kTimeToCrossWithHerd 30 //usec
+int time_delta = 5; //in usec
 ```
 
 result:
 ```C
-shepherd #0: came
-shepherd #0: crossing (=>)
-shepherd #1: came
-shepherd #0: left hat on rigt side
-shepherd #0: crossing (<=)
-shepherd + herd #0: crossing (=>)
-shepherd #2: came
-shepherd + herd #0: finished crossing
-shepherd + herd #1: crossing (=>)
-shepherd #3: came
-shepherd + herd #1: finished crossing
-shepherd + herd #2: crossing (=>)
-shepherd + herd #2: finished crossing
-shepherd + herd #3: crossing (=>)
-shepherd #4: came
-shepherd + herd #3: finished crossing
-shepherd #0: took my hat
-shepherd + herd #4: crossing (<=)
-shepherd #5: came
-shepherd + herd #4: finished crossing
-shepherd + herd #5: crossing (<=)
-shepherd #6: came
-shepherd + herd #5: finished crossing
-shepherd + herd #6: crossing (<=)
-shepherd #7: came
-shepherd + herd #6: finished crossing
-shepherd #7: crossing (=>)
-shepherd #7: left hat on rigt side
-shepherd #7: crossing (<=)
-shepherd #8: came
-shepherd + herd #7: crossing (=>)
-shepherd #9: came
-shepherd + herd #7: finished crossing
-shepherd + herd #8: crossing (=>)
-shepherd + herd #8: finished crossing
-shepherd + herd #9: crossing (=>)
-shepherd + herd #9: finished crossing
-shepherd #7: took my hat
+#0: came
+#0: crossing (=>)
+#1: came
+#0: put down my hat
+#0: crossing (<=)
+#0 + herd: crossing (=>)
+#2: came
+#0 + herd: finished
+#0: took my hat
+#3: came
+#1 + herd: crossing (=>)
+#4: came
+#1 + herd: finished
+#2 + herd: crossing (=>)
+#5: came
+#2 + herd: finished
+#6: came
+#3 + herd: crossing (=>)
+#7: came
+#3 + herd: finished
+#6 + herd: crossing (<=)
+#8: came
+#6 + herd: finished
+#5 + herd: crossing (<=)
+#9: came
+#5 + herd: finished
+#4 + herd: crossing (<=)
+#4 + herd: finished
+#7: crossing (=>)
+#7: put down my hat
+#7: crossing (<=)
+#7 + herd: crossing (=>)
+#7 + herd: finished
+#7: took my hat
+#8 + herd: crossing (=>)
+#8 + herd: finished
+#9 + herd: crossing (=>)
+#9 + herd: finished
 
 ```
 
 ## 2)
 
-velocity:
+delta:
 ```C
-#define kTimeToCrossAlone 10000 //usec
-#define kTimeToCrossWithHerd 30000 //usec
+int time_delta = 50; //in usec
 ```
 
 result:
 ```C
-shepherd #0: came
-shepherd #0: crossing (=>)
-shepherd #1: came
-shepherd #2: came
-shepherd #3: came
-shepherd #4: came
-shepherd #5: came
-shepherd #6: came
-shepherd #7: came
-shepherd #8: came
-shepherd #9: came
-shepherd #0: left hat on rigt side
-shepherd #0: crossing (<=)
-shepherd + herd #0: crossing (=>)
-shepherd + herd #0: finished crossing
-shepherd + herd #1: crossing (=>)
-shepherd + herd #1: finished crossing
-shepherd + herd #2: crossing (=>)
-shepherd + herd #2: finished crossing
-shepherd + herd #3: crossing (=>)
-shepherd + herd #3: finished crossing
-shepherd + herd #7: crossing (=>)
-shepherd + herd #7: finished crossing
-shepherd + herd #8: crossing (=>)
-shepherd + herd #8: finished crossing
-shepherd + herd #9: crossing (=>)
-shepherd + herd #9: finished crossing
-shepherd #0: took my hat
-shepherd + herd #4: crossing (<=)
-shepherd + herd #4: finished crossing
-shepherd + herd #5: crossing (<=)
-shepherd + herd #5: finished crossing
-shepherd + herd #6: crossing (<=)
-shepherd + herd #6: finished crossing
+#0: came
+#0: crossing (=>)
+#0: put down my hat
+#0: crossing (<=)
+#1: came
+#0 + herd: crossing (=>)
+#2: came
+#0 + herd: finished
+#0: took my hat
+#3: came
+#1 + herd: crossing (=>)
+#1 + herd: finished
+#4: came
+#3 + herd: crossing (=>)
+#5: came
+#3 + herd: finished
+#2 + herd: crossing (=>)
+#6: came
+#2 + herd: finished
+#7: came
+#7 + herd: crossing (=>)
+#7 + herd: finished
+#8: came
+#8 + herd: crossing (=>)
+#8 + herd: finished
+#9: came
+#9 + herd: crossing (=>)
+#9 + herd: finished
+#6 + herd: crossing (<=)
+#6 + herd: finished
+#4 + herd: crossing (<=)
+#4 + herd: finished
+#5 + herd: crossing (<=)
+#5 + herd: finished
 
 ```
